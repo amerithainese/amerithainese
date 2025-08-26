@@ -1,0 +1,297 @@
+#!/usr/bin/env -S bash -e
+
+# Fixing annoying issue that breaks GitHub Actions
+# shellcheck disable=SC2001
+clear
+
+# Cosmetics
+BOLD='\e[1m'
+BRED='\e[91m'
+BBLUE='\e[34m'
+BGREEN='\e[92m'
+BYELLOW='\e[93m'
+RESET='\e[0m'
+
+info_print () { echo -e "${BOLD}${BGREEN}[ ${BYELLOW}•${BGREEN} ] $1${RESET}"; }
+input_print () { echo -ne "${BOLD}${BYELLOW}[ ${BGREEN}•${BYELLOW} ] $1${RESET}"; }
+error_print () { echo -e "${BOLD}${BRED}[ ${BBLUE}•${BRED} ] $1${RESET}"; }
+
+# Virtualization check
+virt_check () {
+    hypervisor=$(systemd-detect-virt)
+    case $hypervisor in
+        kvm )   info_print "KVM detected, setting up guest tools."
+                pacstrap /mnt qemu-guest-agent &>/dev/null
+                systemctl enable qemu-guest-agent --root=/mnt &>/dev/null ;;
+        vmware ) info_print "VMWare detected, setting up guest tools."
+                pacstrap /mnt open-vm-tools >/dev/null
+                systemctl enable vmtoolsd --root=/mnt &>/dev/null
+                systemctl enable vmware-vmblock-fuse --root=/mnt &>/dev/null ;;
+        oracle ) info_print "VirtualBox detected, setting up guest tools."
+                pacstrap /mnt virtualbox-guest-utils &>/dev/null
+                systemctl enable vboxservice --root=/mnt &>/dev/null ;;
+        microsoft ) info_print "Hyper-V detected, setting up guest tools."
+                pacstrap /mnt hyperv &>/dev/null
+                systemctl enable hv_fcopy_daemon --root=/mnt &>/dev/null
+                systemctl enable hv_kvp_daemon --root=/mnt &>/dev/null
+                systemctl enable hv_vss_daemon --root=/mnt &>/dev/null ;;
+    esac
+}
+
+# Kernel selector
+kernel_selector () {
+    info_print "List of kernels:"
+    info_print "1) Stable"
+    info_print "2) Hardened"
+    info_print "3) Longterm (LTS)"
+    info_print "4) Zen"
+    input_print "Select kernel (e.g. 1): "
+    read -r kernel_choice
+    case $kernel_choice in
+        1 ) kernel="linux" ;;
+        2 ) kernel="linux-hardened" ;;
+        3 ) kernel="linux-lts" ;;
+        4 ) kernel="linux-zen" ;;
+        * ) error_print "Invalid selection"; return 1 ;;
+    esac
+    return 0
+}
+
+# Networking selection
+network_selector () {
+    info_print "Network utilities:"
+    info_print "1) IWD"
+    info_print "2) NetworkManager"
+    info_print "3) wpa_supplicant + dhcpcd"
+    info_print "4) dhcpcd"
+    info_print "5) Manual"
+    input_print "Select networking option: "
+    read -r network_choice
+    if ! ((1 <= network_choice <= 5)); then
+        error_print "Invalid selection"; return 1
+    fi
+    return 0
+}
+
+network_installer () {
+    case $network_choice in
+        1 ) pacstrap /mnt iwd >/dev/null
+            systemctl enable iwd --root=/mnt &>/dev/null ;;
+        2 ) pacstrap /mnt networkmanager >/dev/null
+            systemctl enable NetworkManager --root=/mnt &>/dev/null ;;
+        3 ) pacstrap /mnt wpa_supplicant dhcpcd >/dev/null
+            systemctl enable wpa_supplicant --root=/mnt &>/dev/null
+            systemctl enable dhcpcd --root=/mnt &>/dev/null ;;
+        4 ) pacstrap /mnt dhcpcd >/dev/null
+            systemctl enable dhcpcd --root=/mnt &>/dev/null ;;
+    esac
+}
+
+# User + root password setup
+userpass_selector () {
+    input_print "Enter username (empty = no user): "
+    read -r username
+    if [[ -z "$username" ]]; then return 0; fi
+    input_print "Password for $username: "
+    read -r -s userpass; echo
+    input_print "Repeat password: "
+    read -r -s userpass2; echo
+    [[ "$userpass" != "$userpass2" ]] && { error_print "Passwords don’t match"; return 1; }
+    return 0
+}
+
+rootpass_selector () {
+    input_print "Root password: "
+    read -r -s rootpass; echo
+    input_print "Repeat root password: "
+    read -r -s rootpass2; echo
+    [[ "$rootpass" != "$rootpass2" ]] && { error_print "Passwords don’t match"; return 1; }
+    return 0
+}
+
+# Microcode
+microcode_detector () {
+    CPU=$(grep vendor_id /proc/cpuinfo)
+    if [[ "$CPU" == *"AuthenticAMD"* ]]; then
+        microcode="amd-ucode"
+    else
+        microcode="intel-ucode"
+    fi
+}
+
+hostname_selector () {
+    input_print "Hostname: "
+    read -r hostname
+    [[ -z "$hostname" ]] && { error_print "Need hostname"; return 1; }
+    return 0
+}
+
+locale_selector () {
+    input_print "Locale (empty = en_US.UTF-8, / = list): "
+    read -r locale
+    case "$locale" in
+        '') locale="en_US.UTF-8"; info_print "$locale will be used."; return 0 ;;
+        '/') sed -E '/^# +|^#$/d;s/^#| *$//g;s/ .*/ (Charset:&)/' /etc/locale.gen | less -M; clear; return 1 ;;
+        *)  if ! grep -q "^#\?$(sed 's/[].*[]/\\&/g' <<< "$locale") " /etc/locale.gen; then
+                error_print "Invalid locale"; return 1; fi
+            return 0 ;;
+    esac
+}
+
+keyboard_selector () {
+    input_print "Keyboard layout (empty=us, /=list): "
+    read -r kblayout
+    case "$kblayout" in
+        '') kblayout="us"; info_print "Using US"; return 0 ;;
+        '/') localectl list-keymaps; clear; return 1 ;;
+        *) if ! localectl list-keymaps | grep -Fxq "$kblayout"; then
+               error_print "Invalid keymap"; return 1; fi
+           loadkeys "$kblayout"; return 0 ;;
+    esac
+}
+
+# ───────────────────────────────
+# Main Script
+# ───────────────────────────────
+
+echo -ne "${BOLD}${BYELLOW}
+==============================
+   EASY-ARCH (No Encryption)
+==============================
+${RESET}"
+
+until keyboard_selector; do : ; done
+info_print "Available disks:"
+PS3="Select disk: "
+select ENTRY in $(lsblk -dpnoNAME|grep -P "/dev/sd|nvme|vd"); do
+    DISK="$ENTRY"
+    info_print "Installing on $DISK"; break
+done
+
+until kernel_selector; do : ; done
+until network_selector; do : ; done
+until locale_selector; do : ; done
+until hostname_selector; do : ; done
+until userpass_selector; do : ; done
+until rootpass_selector; do : ; done
+
+input_print "This will WIPE $DISK. Continue [y/N]?: "
+read -r disk_response
+[[ ! "${disk_response,,}" =~ ^(y|yes)$ ]] && { error_print "Aborting"; exit; }
+
+wipefs -af "$DISK" &>/dev/null
+sgdisk -Zo "$DISK" &>/dev/null
+
+info_print "Creating partitions..."
+parted -s "$DISK" \
+    mklabel gpt \
+    mkpart ESP fat32 1MiB 1025MiB \
+    set 1 esp on \
+    mkpart ROOT 1025MiB 100%
+
+ESP="/dev/disk/by-partlabel/ESP"
+ROOT="/dev/disk/by-partlabel/ROOT"
+
+partprobe "$DISK"
+
+mkfs.fat -F 32 "$ESP" &>/dev/null
+mkfs.btrfs "$ROOT" &>/dev/null
+mount "$ROOT" /mnt
+
+info_print "Creating BTRFS subvolumes..."
+subvols=(snapshots var_pkgs var_log home root srv)
+for subvol in '' "${subvols[@]}"; do
+    btrfs su cr /mnt/@"$subvol" &>/dev/null
+done
+
+umount /mnt
+mountopts="ssd,noatime,compress-force=zstd:3,discard=async"
+mount -o "$mountopts",subvol=@ "$ROOT" /mnt
+mkdir -p /mnt/{home,root,srv,.snapshots,var/{log,cache/pacman/pkg},boot}
+for subvol in "${subvols[@]:2}"; do
+    mount -o "$mountopts",subvol=@"$subvol" "$ROOT" /mnt/"${subvol//_//}"
+done
+chmod 750 /mnt/root
+mount -o "$mountopts",subvol=@snapshots "$ROOT" /mnt/.snapshots
+mount -o "$mountopts",subvol=@var_pkgs "$ROOT" /mnt/var/cache/pacman/pkg
+chattr +C /mnt/var/log
+mount "$ESP" /mnt/boot/
+
+microcode_detector
+info_print "Installing base system..."
+pacstrap -K /mnt base "$kernel" "$microcode" linux-firmware "$kernel"-headers btrfs-progs grub grub-btrfs rsync efibootmgr snapper reflector snap-pac zram-generator sudo &>/dev/null
+
+echo "$hostname" > /mnt/etc/hostname
+genfstab -U /mnt >> /mnt/etc/fstab
+
+sed -i "/^#$locale/s/^#//" /mnt/etc/locale.gen
+echo "LANG=$locale" > /mnt/etc/locale.conf
+echo "KEYMAP=$kblayout" > /mnt/etc/vconsole.conf
+
+cat > /mnt/etc/hosts <<EOF
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $hostname.localdomain   $hostname
+EOF
+
+virt_check
+network_installer
+
+cat > /mnt/etc/mkinitcpio.conf <<EOF
+HOOKS=(systemd autodetect keyboard sd-vconsole modconf block filesystems)
+EOF
+
+info_print "Configuring system..."
+arch-chroot /mnt /bin/bash -e <<EOF
+ln -sf /usr/share/zoneinfo/$(curl -s http://ip-api.com/line?fields=timezone) /etc/localtime
+hwclock --systohc
+locale-gen &>/dev/null
+mkinitcpio -P &>/dev/null
+snapper --no-dbus -c root create-config /
+btrfs subvolume delete /.snapshots &>/dev/null
+mkdir /.snapshots
+mount -a &>/dev/null
+chmod 750 /.snapshots
+grub-install --target=x86_64-efi --efi-directory=/boot/ --bootloader-id=GRUB &>/dev/null
+grub-mkconfig -o /boot/grub/grub.cfg &>/dev/null
+EOF
+
+echo "root:$rootpass" | arch-chroot /mnt chpasswd
+if [[ -n "$username" ]]; then
+    echo "%wheel ALL=(ALL:ALL) ALL" > /mnt/etc/sudoers.d/wheel
+    arch-chroot /mnt useradd -m -G wheel -s /bin/bash "$username"
+    echo "$username:$userpass" | arch-chroot /mnt chpasswd
+fi
+
+info_print "Configuring /boot backup hook..."
+mkdir /mnt/etc/pacman.d/hooks
+cat > /mnt/etc/pacman.d/hooks/50-bootbackup.hook <<EOF
+[Trigger]
+Operation = Upgrade
+Operation = Install
+Operation = Remove
+Type = Path
+Target = usr/lib/modules/*/vmlinuz
+
+[Action]
+Depends = rsync
+Description = Backing up /boot...
+When = PostTransaction
+Exec = /usr/bin/rsync -a --delete /boot /.bootbackup
+EOF
+
+info_print "Configuring ZRAM..."
+cat > /mnt/etc/systemd/zram-generator.conf <<EOF
+[zram0]
+zram-size = min(ram, 8192)
+EOF
+
+sed -Ei 's/^#(Color)$/\1\nILoveCandy/;s/^#(ParallelDownloads).*/\1 = 10/' /mnt/etc/pacman.conf
+
+services=(reflector.timer snapper-timeline.timer snapper-cleanup.timer btrfs-scrub@-.timer btrfs-scrub@home.timer btrfs-scrub@var-log.timer btrfs-scrub@\\x2esnapshots.timer grub-btrfsd.service systemd-oomd)
+for service in "${services[@]}"; do
+    systemctl enable "$service" --root=/mnt &>/dev/null
+done
+
+info_print "Done! Reboot when ready."
+exit
