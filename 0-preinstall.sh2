@@ -102,7 +102,7 @@ subvolumesetup () {
 # mount @ subvolume
     mount -o ${MOUNT_OPTIONS},subvol=@ ${partition3} /mnt
 # make directories home, .snapshots, var/log, tmp, home, var/cache/pacman/pkg, svr, root
-    mkdir -p /mnt/{home,root,srv,.snapshots,var/{log,cache/pacman/pkg}
+    mkdir -p /mnt/{home,root,srv,.snapshots,var/log,var/cache/pacman/pkg}
 # mount subvolumes
     mountallsubvol
 }
