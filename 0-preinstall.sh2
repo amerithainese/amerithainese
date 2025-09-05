@@ -72,9 +72,9 @@ echo -ne "
                     Creating Filesystems
 -------------------------------------------------------------------------
 "
-# @description Creates the btrfs subvolumes. 
+# @description Creates the btrfs subvolumes.
 createsubvolumes () {
-    btrfs subvolume create /mnt/@
+    # Do NOT create @ for root. Root will be top-level (ID 5).
     btrfs subvolume create /mnt/@home
     btrfs subvolume create /mnt/@root
     btrfs subvolume create /mnt/@srv
@@ -104,8 +104,8 @@ subvolumesetup () {
     # unmount root if already mounted
     umount /mnt
 
-    # mount root subvolume
-    mount -o ${MOUNT_OPTIONS},subvol=@ ${partition3} /mnt
+    # mount ROOT as top-level (ID 5) instead of @
+    mount -o ${MOUNT_OPTIONS},subvolid=5 ${partition3} /mnt
 
     # create directories for other subvolumes
     mkdir -p /mnt/{home,root,srv,.snapshots,var/log,var/cache/pacman/pkg}
