@@ -85,27 +85,35 @@ createsubvolumes () {
 
 # @description Mount all btrfs subvolumes after root has been mounted.
 mountallsubvol () {
+    # Mount Snapper snapshot subvolume first (required)
+    mount -o ${MOUNT_OPTIONS},subvol=@.snapshots ${partition3} /mnt/.snapshots
+
+    # Mount other subvolumes
     mount -o ${MOUNT_OPTIONS},subvol=@home ${partition3} /mnt/home
     mount -o ${MOUNT_OPTIONS},subvol=@root ${partition3} /mnt/root
     mount -o ${MOUNT_OPTIONS},subvol=@srv ${partition3} /mnt/srv
-    mount -o ${MOUNT_OPTIONS},subvol=@.snapshots ${partition3} /mnt/.snapshots
     mount -o ${MOUNT_OPTIONS},subvol=@var_log ${partition3} /mnt/var/log
     mount -o ${MOUNT_OPTIONS},subvol=@var_pkgs ${partition3} /mnt/var/cache/pacman/pkg
 }
 
-# @description BTRFS subvolulme creation and mounting. 
+# @description BTRFS subvolume creation and mounting. 
 subvolumesetup () {
-# create nonroot subvolumes
+    # create all subvolumes
     createsubvolumes     
-# unmount root to remount with subvolume 
+
+    # unmount root if already mounted
     umount /mnt
-# mount @ subvolume
+
+    # mount root subvolume
     mount -o ${MOUNT_OPTIONS},subvol=@ ${partition3} /mnt
-# make directories home, .snapshots, var/log, tmp, home, var/cache/pacman/pkg, svr, root
+
+    # create directories for other subvolumes
     mkdir -p /mnt/{home,root,srv,.snapshots,var/log,var/cache/pacman/pkg}
-# mount subvolumes
+
+    # mount snapshots and other subvolumes
     mountallsubvol
 }
+
 
 if [[ "${DISK}" =~ "nvme" ]]; then
     partition2=${DISK}p2
